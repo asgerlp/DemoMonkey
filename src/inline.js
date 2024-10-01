@@ -37,77 +37,129 @@ import JSON5 from 'json5'
     }
   })
 
+  // Function to modify fetch responses
+  async function mutateFetchResponse(url, response) {
+    if (rules.length === 0) return response;
+    const clonedResponse = response.clone();
+    const contentType = clonedResponse.headers.get("Content-Type");
+
+    if (contentType && contentType.includes("application/json")) {
+      const original = await clonedResponse.text();
+      const result = rules
+        .filter((e) => e[0].includes('AjaxResponse'))
+        .reduce((r, e) => {
+          try {
+            const r2 = functions[e[0]](url, r, e[1]);
+            return r2;
+          } catch (err) {
+            console.warn(`Could not run ${e[0]}, because of an error:`);
+            console.warn(err);
+          }
+          return r;
+        }, original);
+
+      if (isDebug() && original !== result) {
+        console.log('[DM] Modified Fetch Response. Original:');
+        console.log(original);
+        console.log('[DM] Modified Fetch Response. Result:');
+        console.log(result);
+        console.log('[DM] Modified Fetch Response. End.');
+      }
+
+      return new Response(result, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers
+      });
+    }
+
+    return response;
+  }
+
   if (config.hookIntoAjax) {
     console.info(
       'Demo Monkey hooks into ajax requests. This may break things. Use at your own risk!'
-    )
-    let ajaxCounter = 0
+    );
+    let ajaxCounter = 0;
     const functions = {
       patchAjaxResponse: (url, response, context) => {
-        const link = scope.document.createElement('a')
-        link.href = url
+        const link = scope.document.createElement('a');
+        link.href = url;
         if (match(url, context.urlPattern) || match(link.href, context.urlPattern)) {
           const patch =
-            typeof context.patch === 'string' ? JSON5.parse(context.patch) : context.patch
-          const patched = jsonpatch.applyPatch(JSON5.parse(response), patch).newDocument
-          return JSON.stringify(patched)
+            typeof context.patch === 'string' ? JSON5.parse(context.patch) : context.patch;
+          const patched = jsonpatch.applyPatch(JSON5.parse(response), patch).newDocument;
+          return JSON.stringify(patched);
         }
-        return response
+        return response;
       },
       replaceAjaxResponse: (url, response, context) => {
-        const link = scope.document.createElement('a')
-        link.href = url
+        const link = scope.document.createElement('a');
+        link.href = url;
         if (match(url, context.urlPattern) || match(link.href, context.urlPattern)) {
           if (context.search === false) {
-            return context.replace
+            return context.replace;
           }
 
-          return response.replace(context.search, context.replace)
+          return response.replace(context.search, context.replace);
         }
-        return response
+        return response;
       }
-    }
+    };
+    
     const mutateResponse = function (url, response) {
       return rules
         .filter((e) => e[0].includes('AjaxResponse'))
         .reduce((r, e) => {
           try {
-            const r2 = functions[e[0]](url, r, e[1])
-            return r2
+            const r2 = functions[e[0]](url, r, e[1]);
+            return r2;
           } catch (err) {
-            console.warn(`Could not run ${e[0]}, because of an error:`)
-            console.warn(err)
+            console.warn(`Could not run ${e[0]}, because of an error:`);
+            console.warn(err);
           }
-          return r
-        }, response)
-    }
-    const openPrototype = XMLHttpRequest.prototype.open
+          return r;
+        }, response);
+    };
+
+    // XMLHttpRequest interception
+    const openPrototype = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function () {
-      const url = arguments[1]
+      const url = arguments[1];
       this.addEventListener('readystatechange', function (event) {
         if (this.readyState === 4 && rules.length > 0) {
           // defineProperty destroys existing response / responseText, so
-          // here we create the result first and make them writeable later.
-          const original = event.target.responseText
-          const result = mutateResponse(url, event.target.responseText)
-          Object.defineProperty(this, 'response', { writable: true })
-          Object.defineProperty(this, 'responseText', { writable: true })
+          // here we create the result first and make them writable later.
+          const original = event.target.responseText;
+          const result = mutateResponse(url, event.target.responseText);
+          Object.defineProperty(this, 'response', { writable: true });
+          Object.defineProperty(this, 'responseText', { writable: true });
           if (isDebug() && original !== result) {
-            ajaxCounter++
-            console.log('[DM] Modified Ajax Response. Original:')
-            console.log(original)
-            console.log('[DM] Modified Ajax Response. Result:')
-            console.log(result)
-            console.log('[DM] Modified Ajax Response. End.')
-            const visualCounter = document.getElementById('demo-monkey-ajax-count')
+            ajaxCounter++;
+            console.log('[DM] Modified Ajax Response. Original:');
+            console.log(original);
+            console.log('[DM] Modified Ajax Response. Result:');
+            console.log(result);
+            console.log('[DM] Modified Ajax Response. End.');
+            const visualCounter = document.getElementById('demo-monkey-ajax-count');
             if (visualCounter) {
-              visualCounter.innerHTML = `Ajax Count: ${ajaxCounter}`
+              visualCounter.innerHTML = `Ajax Count: ${ajaxCounter}`;
             }
           }
-          this.response = this.responseText = result
+          this.response = this.responseText = result;
         }
-      })
-      return openPrototype.apply(this, arguments)
+      });
+      return openPrototype.apply(this, arguments);
     }
+
+    // Fetch interception
+    const originalFetch = window.fetch;
+    window.fetch = async function (...args) {
+      const response = await originalFetch.apply(this, args);
+      const url = args[0];
+
+      // Mutate the fetch response using the same rules
+      return mutateFetchResponse(url, response);
+    };
   }
-})(window, window.demoMonkeyConfig || { hookIntoAjax: false, hookIntoHyperGraph: false })
+})(window, window.demoMonkeyConfig || { hookIntoAjax: false, hookIntoHyperGraph: false });
